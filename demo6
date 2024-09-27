@@ -1,0 +1,168 @@
+import time
+import os
+import pickle
+import mediapipe as mp
+import cv2
+import numpy as np
+from textblob import TextBlob
+import speech_recognition as sr
+import pyttsx3
+import pyaudio
+import pygame
+
+# Load the pre-trained model
+model_dict = pickle.load(open('./model.p', 'rb'))
+model = model_dict['model']
+
+# Initialize video capture from webcam
+cap = cv2.VideoCapture(0)
+
+# Initialize MediaPipe hands model
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+hands = mp_hands.Hands(static_image_mode=True, min_detection_confidence=0.3)
+
+# Define label mapping
+labels_dict = {0: 'A', 1: 'B', 2: 'C', 3: 'D', 4: 'E', 5: 'F', 6: 'G', 7: 'H', 8: 'I', 9: 'J', 10: 'K', 11: 'L', 12: 'M', 13: 'N', 14: 'O', 15: 'P', 16: 'Q', 17: 'R', 18: 'S', 19: 'T', 20: 'U', 21: 'V', 22: 'W', 23: 'X', 24: 'Y', 25: 'Z'}
+
+# Initialize sentence and track previous prediction
+sentence = ""
+prev_character = None
+
+# Time management
+last_print_time = 0
+print_interval = 5  # Increase time interval for printing the sentence (in seconds)
+last_append_time = 0
+append_interval = 3  # Delay between appending characters to the sentence (in seconds)
+
+# Track the time of the last detected gesture
+last_gesture_time = time.time()
+max_no_gesture_time = 20  # 20 seconds
+
+# Start loop for capturing video frames
+while True:
+    data_aux = []
+    x_ = []
+    y_ = []
+
+    ret, frame = cap.read()
+
+    H, W, _ = frame.shape
+
+    # Convert the frame to RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # Process the frame for hand landmarks
+    results = hands.process(frame_rgb)
+    current_time = time.time()
+
+    if results.multi_hand_landmarks:
+        # Update the last gesture detection time
+        last_gesture_time = current_time
+
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_drawing.draw_landmarks(
+                frame,
+                hand_landmarks,
+                mp_hands.HAND_CONNECTIONS,
+                mp_drawing_styles.get_default_hand_landmarks_style(),
+                mp_drawing_styles.get_default_hand_connections_style()
+            )
+
+        # Extract the landmark coordinates
+        for hand_landmarks in results.multi_hand_landmarks:
+            for i in range(len(hand_landmarks.landmark)):
+                x = hand_landmarks.landmark[i].x
+                y = hand_landmarks.landmark[i].y
+                x_.append(x)
+                y_.append(y)
+
+            for i in range(len(hand_landmarks.landmark)):
+                x = hand_landmarks.landmark[i].x
+                y = hand_landmarks.landmark[i].y
+                data_aux.append(x - min(x_))
+                data_aux.append(y - min(y_))
+
+        # Define bounding box coordinates
+        x1 = int(min(x_) * W) - 10
+        y1 = int(min(y_) * H) - 10
+        x2 = int(max(x_) * W) - 10
+        y2 = int(max(y_) * H) - 10
+
+        # Make a prediction using the model
+        prediction = model.predict([np.asarray(data_aux)])
+        predicted_character = labels_dict[int(prediction[0])]
+
+        # Append the predicted character to the sentence only if the delay is met
+        if predicted_character != prev_character and (current_time - last_append_time > append_interval):
+            sentence += predicted_character
+            prev_character = predicted_character
+            last_append_time = current_time  # Update the time of the last append
+
+        # Print the sentence at a fixed interval
+        if current_time - last_print_time > print_interval:
+            print(f'Sentence: {sentence}')
+            last_print_time = current_time  # Update the last print time
+
+        # Display the prediction on the video frame
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 4)
+        cv2.putText(frame, predicted_character, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 0), 3, cv2.LINE_AA)
+
+    # Check if 1 minute has passed with no gesture detected
+    if current_time - last_gesture_time > max_no_gesture_time:
+        print("No gestures detected for 20 seconds. Ending video capture.")
+        break
+
+    # Show the frame with the predictions
+    cv2.imshow('frame', frame)
+
+    # Exit the loop when 'q' is pressed
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Release the video capture and close windows
+cap.release()
+cv2.destroyAllWindows()
+
+# Print the final sentence after exiting the loop
+print(f'Final Sentence: {sentence}')
+
+
+def correct_sentence(sentence):
+    blob = TextBlob(sentence)
+    corrected = str(blob.correct())
+    return corrected
+
+# Test the function
+
+corrected_sentence = correct_sentence(sentence)
+print("Corrected Sentence:", corrected_sentence)
+
+
+engine = pyttsx3.init('sapi5')
+voices = engine.getProperty('voices')
+engine.setProperty('voice',voices[1].id)
+
+def speak(text):
+    engine.say(text)
+    engine.runAndWait()
+
+def takecommand():
+    r=sr.Recognizer()
+    with sr.Microphone() as source:
+        print("I am listening")
+        audio=r.listen(source)
+        try:
+            statement=r.recognize_google(audio,language='en-in')
+            print(f"user said:{statement}\n")
+        except Exception as e:
+            speak("pardon me,please say that again")
+            takecommand()
+            return "None"
+        return statement
+
+takecommand()
+
+
+
